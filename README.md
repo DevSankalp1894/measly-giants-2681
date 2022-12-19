@@ -1,70 +1,349 @@
-# Getting Started with Create React App
+<div align="center">
+  <h1>🏎 side car</h1>
+  <br/>
+   Alternative way to code splitting
+  <br/>
+  
+  <a href="https://www.npmjs.com/package/use-sidecar">
+    <img src="https://img.shields.io/npm/v/use-sidecar.svg?style=flat-square" />
+  </a>
+    
+  <a href="https://travis-ci.org/theKashey/use-sidecar">
+   <img src="https://img.shields.io/travis/theKashey/use-sidecar.svg?style=flat-square" alt="Build status">
+  </a> 
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+  <a href="https://www.npmjs.com/package/use-sidecar">
+   <img src="https://img.shields.io/npm/dm/use-sidecar.svg" alt="npm downloads">
+  </a> 
 
-## Available Scripts
+  <a href="https://bundlephobia.com/result?p=use-sidecar">
+   <img src="https://img.shields.io/bundlephobia/minzip/use-sidecar.svg" alt="bundle size">
+  </a>   
+  <br/>
+</div>
 
-In the project directory, you can run:
+UI/Effects code splitting pattern
+ - [read the original article](https://dev.to/thekashey/sidecar-for-a-code-splitting-1o8g) to understand concepts behind.
+ - [read how Google](https://medium.com/@cramforce/designing-very-large-javascript-applications-6e013a3291a3) split view and logic.
+ - [watch how Facebook](https://developers.facebook.com/videos/2019/building-the-new-facebookcom-with-react-graphql-and-relay/) defers "interactivity" effects. 
 
-### `npm start`
+## Terminology: 
+- `sidecar` - non UI component, which may carry effects for a paired UI component.
+- `UI` - UI component, which interactivity is moved to a `sidecar`.
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+`UI` is a _view_, `sidecar` is the _logic_ for it. Like Batman(UI) and his sidekick Robin(effects). 
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## Concept
+- a `package` exposes __3 entry points__ using a [nested `package.json` format](https://github.com/theKashey/multiple-entry-points-example):
+  - default aka `combination`, and lets hope tree shaking will save you
+  - `UI`, with only UI part
+  - `sidecar`, with all the logic
+  - > `UI` + `sidecar` === `combination`. The size of `UI+sidecar` might a bit bigger than size of their `combination`.
+  Use [size-limit](https://github.com/ai/size-limit) to control their size independently. 
+  
 
-### `npm test`
+- package uses a `medium` to talk with own sidecar, breaking explicit dependency.
+ 
+- if package depends on another _sidecar_ package:
+  - it shall export dependency side car among own sidecar.
+  - package imports own sidecar via `medium`, thus able to export multiple sidecars via one export. 
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+- final consumer uses `sidecar` or `useSidecar` to combine pieces together.  
 
-### `npm run build`
+## Rules
+- `UI` components might use/import any other `UI` components
+- `sidecar` could use/import any other `sidecar`
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+That would form two different code branches, you may load separately - UI first, and effect sidecar later.
+That also leads to a obvious consequence - __one sidecar may export all sidecars__.
+- to decouple `sidecars` from module exports, and be able to pick "the right" one at any point
+you have to use `exportSidecar(medium, component)` to export it, and use the same `medium` to import it back.
+- this limitation is for __libraries only__, as long as in the usercode you might 
+dynamically import whatever and whenever you want. 
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+- `useMedium` is always async - action would be executed in a next tick, or on the logic load.
+- `sidecar` is always async - is does not matter have you loaded logic or not - component would be 
+rendered at least in the next tick.
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+> except `medium.read`, which synchronously read the data from a medium, 
+and `medium.assingSyncMedium` which changes `useMedium` to be sync. 
 
-### `npm run eject`
+## SSR and usage tracking
+Sidecar pattern is clear:
+- you dont need to use/render any `sidecars` on server.
+- you dont have to load `sidecars` prior main render.
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+Thus - no usage tracking, and literally no SSR. It's just skipped.
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+# API
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+## createMedium()
+- Type: Util. Creates shared effect medium for algebraic effect.
+- Goal: To decouple modules from each other.
+- Usage: `use` in UI side, and `assign` from side-car. All effects would be executed.
+- Analog: WeakMap, React.__SECRET_DOM_DO_NOT_USE_OR_YOU_WILL_BE_FIRED
+```js
+const medium = createMedium(defaultValue);
+const cancelCb = medium.useMedium(someData);
 
-## Learn More
+// like
+useEffect(() => medium.useMedium(someData), []);
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+medium.assignMedium(someDataProcessor)
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+// createSidecarMedium is a helper for createMedium to create a "sidecar" symbol
+const effectCar = createSidecarMedium();
+```
 
-### Code Splitting
+> ! For consistence `useMedium` is async - sidecar load status should not affect function behavior,
+thus effect would be always executed at least in the "next tick". You may alter
+this behavior by using `medium.assingSyncMedium`.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
 
-### Analyzing the Bundle Size
+## exportSidecar(medium, component)
+- Type: HOC
+- Goal: store `component` inside `medium` and return external wrapper
+- Solving: decoupling module exports to support exporting multiple sidecars via a single entry point.
+- Usage: use to export a `sidecar`
+- Analog: WeakMap
+```js
+import {effectCar} from './medium';
+import {EffectComponent} from './Effect';
+// !!! - to prevent Effect from being imported
+// `effectCar` medium __have__ to be defined in another file
+// const effectCar = createSidecarMedium();
+export default exportSidecar(effectCar, EffectComponent);
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+## sidecar(importer)
+- Type: HOC
+- Goal: React.lazy analog for code splitting, but does not require `Suspense`, might provide error failback.
+- Usage: like React.lazy to load a side-car component.
+- Analog: React.Lazy
+```js
+import {sidecar} from "use-sidecar";
+const Sidecar =  sidecar(() => import('./sidecar'), <span>on fail</span>);
 
-### Making a Progressive Web App
+<>
+ <Sidecar />
+ <UI />
+</> 
+```
+### Importing `exportedSidecar`
+Would require additional prop to be set - ```<Sidecar sideCar={effectCar} />```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+## useSidecar(importer)
+- Type: hook, loads a `sideCar` using provided `importer` which shall follow React.lazy API
+- Goal: to load a side car without displaying any "spinners".
+- Usage: load side car for a component
+- Analog: none
+```js
+import {useSidecar} from 'use-sidecar';
 
-### Advanced Configuration
+const [Car, error] = useSidecar(() => import('./sideCar'));
+return (
+  <>
+    {Car ? <Car {...props} /> : null}
+    <UIComponent {...props}>
+  </>
+); 
+```
+### Importing `exportedSideCar`
+You have to specify __effect medium__ to read data from, as long as __export itself is empty__.
+```js
+import {useSidecar} from 'use-sidecar';
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+/* medium.js: */ export const effectCar = useMedium({});
+/* sideCar.js: */export default exportSidecar(effectCar, EffectComponent);
 
-### Deployment
+const [Car, error] = useSidecar(() => import('./sideCar'), effectCar); 
+return (
+  <>
+    {Car ? <Car {...props} /> : null}
+    <UIComponent {...props}>
+  </>
+);
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+## renderCar(Component)
+- Type: HOC, moves renderProp component to a side channel
+- Goal: Provide render prop support, ie defer component loading keeping tree untouched.
+- Usage: Provide `defaults` and use them until sidecar is loaded letting you code split (non visual) render-prop component
+- Analog: - Analog: code split library like [react-imported-library](https://github.com/theKashey/react-imported-library) or [@loadable/lib](https://www.smooth-code.com/open-source/loadable-components/docs/library-splitting/).
+```js
+import {renderCar, sidecar} from "use-sidecar";
+const RenderCar = renderCar(
+  // will move side car to a side channel
+  sidecar(() => import('react-powerplug').then(imports => imports.Value)),
+  // default render props
+  [{value: 0}]  
+);
 
-### `npm run build` fails to minify
+<RenderCar>
+  {({value}) => <span>{value}</span>}
+</RenderCar>
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+## setConfig(config)
+```js
+setConfig({
+  onError, // sets default error handler
+});
+```
+
+# Examples
+## Deferred effect
+Let's imagine - on element focus you have to do "something", for example focus anther element
+
+#### Original code
+```js
+onFocus = event => {
+  if (event.currentTarget === event.target) {
+    document.querySelectorAll('button', event.currentTarget)
+  }
+}
+```
+
+#### Sidecar code
+
+3. Use medium (yes, .3)
+```js
+// we are calling medium with an original event as an argument
+const onFocus = event => focusMedium.useMedium(event);
+```
+2. Define reaction
+```js
+// in a sidecar
+
+// we are setting handler for the effect medium
+// effect is complicated - we are skipping event "bubbling", 
+// and focusing some button inside a parent
+focusMedium.assignMedium(event => {
+  if (event.currentTarget === event.target) {
+    document.querySelectorAll('button', event.currentTarget)
+  }
+});
+
+```
+1. Create medium
+Having these constrains - we have to clone `event`, as long as React would eventually reuse SyntheticEvent, thus not
+preserve `target` and `currentTarget`. 
+```js
+// 
+const focusMedium = createMedium(null, event => ({...event}));
+```
+Now medium side effect is ok to be async
+
+__Example__: [Effect for react-focus-lock](https://github.com/theKashey/react-focus-lock/blob/8c69c644ecfeed2ec9dc0dc4b5b30e896a366738/src/Lock.js#L48) - 1kb UI, 4kb sidecar
+
+### Medium callback
+Like a library level code splitting
+
+#### Original code
+```js
+import {x, y} from './utils';
+
+useEffect(() => {
+  if (x()) {
+    y()
+  }
+}, []);
+```
+
+#### Sidecar code
+
+```js
+// medium
+const utilMedium = createMedium();
+
+// utils
+const x = () => { /* ... */};
+const y = () => { /* ... */};
+
+// medium will callback with exports exposed
+utilMedium.assignMedium(cb => cb({
+ x, y
+}));
+
+
+// UI
+// not importing x and y from the module system, but would be given via callback
+useEffect(() => {
+  utilMedium.useMedium(({x,y}) => {
+      if (x()) {
+        y()
+      }
+  })
+}, []);
+```
+
+- Hint: there is a easy way to type it
+```js
+const utilMedium = createMedium<(cb: typeof import('./utils')) => void>();
+``` 
+
+__Example__: [Callback API for react-focus-lock](https://github.com/theKashey/react-focus-lock/blob/8c69c644ecfeed2ec9dc0dc4b5b30e896a366738/src/MoveFocusInside.js#L12) 
+
+### Split effects
+Lets take an example from a Google - Calendar app, with view and logic separated.
+To be honest - it's not easy to extract logic from application like calendar - usually it's tight coupled.
+
+#### Original code
+```js
+const CalendarUI = () => { 
+  const [date, setDate] = useState();
+  const onButtonClick = useCallback(() => setDate(Date.now), []);
+  
+  return (
+    <>
+     <input type="date" onChange={setDate} value={date} />
+     <input type="button" onClick={onButtonClick}>Set Today</button>
+    </>
+  )
+}
+```
+#### Sidecar code
+
+```js
+const CalendarUI = () => {
+  const [events, setEvents] = useState({});
+  const [date, setDate] = useState();
+  
+  return (
+    <>
+     <Sidecar setDate={setDate} setEvents={setEvents}/>
+     <UILayout {...events} date={date}/>
+    </>
+  )
+}
+
+const UILayout = ({onDateChange, onButtonClick, date}) => (
+  <>
+      <input type="date" onChange={onDateChange} value={date} />
+      <input type="button" onClick={onButtonClick}>Set Today</button>
+  </>
+);
+
+// in a sidecar
+// we are providing callbacks back to UI
+const Sidecar = ({setDate, setEvents}) => {
+  useEffect(() => setEvents({
+      onDateChange:setDate,
+      onButtonClick: () => setDate(Date.now),
+  }), []);
+  
+  return null;
+}
+```  
+
+While in this example this looks a bit, you know, strange - there are 3 times more code
+that in the original example - that would make a sense for a real Calendar, especially
+if some helper library, like `moment`, has been used.
+
+__Example__: [Effect for react-remove-scroll](https://github.com/theKashey/react-remove-scroll/blob/666472d5c77fb6c4e5beffdde87c53ae63ef42c5/src/SideEffect.tsx#L166) - 300b UI, 2kb sidecar
+
+# Licence
+
+MIT
+
